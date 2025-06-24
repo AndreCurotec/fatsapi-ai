@@ -24,14 +24,27 @@ else:
 # Initialize OpenAI client
 try:
     from openai import AsyncOpenAI
-    client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-    print("✅ OpenAI client initialized")
+    if OPENAI_API_KEY:
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        print("✅ OpenAI client initialized")
+    else:
+        client = None
+        print("⚠️  OpenAI client not initialized - no API key")
 except ImportError:
     print("❌ OpenAI package not found. Install with: pip install openai")
     client = None
 except Exception as e:
     print(f"❌ Error initializing OpenAI client: {e}")
-    client = None
+    # Try fallback initialization
+    try:
+        if OPENAI_API_KEY:
+            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            print("✅ OpenAI client initialized with fallback method")
+        else:
+            client = None
+    except Exception as e2:
+        print(f"❌ Fallback initialization also failed: {e2}")
+        client = None
 
 app = FastAPI(title="Chatbot Demo API")
 
