@@ -17,7 +17,11 @@ app = FastAPI(title="Chatbot Demo API")
 # CORS middleware for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",  # For local development
+        "https://*.netlify.app",  # For Netlify deployment
+        "https://shimmering-crostata-d31ea8.netlify.app"  # Replace with your actual Netlify URL
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
