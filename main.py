@@ -8,9 +8,30 @@ from dotenv import load_dotenv
 import json
 import math
 import uvicorn
+import asyncio
 
 # Load environment variables
 load_dotenv()
+
+# Check for required environment variables
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    print("⚠️  WARNING: OPENAI_API_KEY environment variable not set")
+    print("⚠️  Chat functionality will not work without OpenAI API key")
+else:
+    print("✅ OpenAI API key found")
+
+# Initialize OpenAI client
+try:
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+    print("✅ OpenAI client initialized")
+except ImportError:
+    print("❌ OpenAI package not found. Install with: pip install openai")
+    client = None
+except Exception as e:
+    print(f"❌ Error initializing OpenAI client: {e}")
+    client = None
 
 app = FastAPI(title="Chatbot Demo API")
 
@@ -26,9 +47,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# OpenAI client setup
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Request/Response models
 class ChatMessage(BaseModel):
@@ -361,24 +379,48 @@ SYSTEM_PROMPTS = {
 async def get_openai_response(messages: List[Dict[str, str]], category: str) -> str:
     """Get response from OpenAI with category-specific system prompt"""
     try:
+        print(f"🔵 Starting OpenAI request for category: {category}")
+        
+        if not OPENAI_API_KEY:
+            error_msg = "OpenAI API key not found in environment variables"
+            print(f"❌ {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+        if not client:
+            error_msg = "OpenAI client not initialized - check API key"
+            print(f"❌ {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
+        
         system_message = {"role": "system", "content": SYSTEM_PROMPTS[category]}
         full_messages = [system_message] + messages
         
-        response = openai.chat.completions.create(
+        print(f"🔵 Making OpenAI request with {len(full_messages)} messages")
+        print(f"🔵 Using model: {os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')}")
+        
+        response = await client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
             messages=full_messages,
             max_tokens=300,
             temperature=0.7
         )
         
+        print("🔵 OpenAI request successful ✅")
         return response.choices[0].message.content
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
+        error_msg = f"OpenAI API error: {str(e)}"
+        print(f"❌ {error_msg}")
+        import traceback
+        print(f"❌ Full traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=error_msg)
 
 async def get_embedding(text: str) -> List[float]:
     """Get embedding vector for text using OpenAI"""
     try:
-        response = openai.embeddings.create(
+        if not client:
+            raise HTTPException(status_code=500, detail="OpenAI client not initialized")
+        
+        response = await client.embeddings.create(
             model="text-embedding-ada-002",
             input=text
         )
@@ -638,21 +680,40 @@ def match_providers(user_needs: str, category: str, provider_type: str = None) -
 async def root():
     return {"message": "Chatbot Demo API"}
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint to debug environment setup"""
+    return {
+        "status": "healthy",
+        "openai_api_key_set": bool(OPENAI_API_KEY),
+        "openai_client_initialized": bool(client),
+        "openai_model": os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+    }
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(chat_message: ChatMessage):
     """Main chat endpoint"""
     try:
+        print(f"🔵 Chat request received: category={chat_message.category}, message_length={len(chat_message.message)}")
+        print(f"🔵 Conversation history length: {len(chat_message.conversation_history)}")
+        
         # Build conversation history
         messages = chat_message.conversation_history + [
             {"role": "user", "content": chat_message.message}
         ]
         
+        print(f"🔵 Total messages for AI: {len(messages)}")
+        
         # Get AI response
+        print("🔵 Calling OpenAI...")
         ai_response = await get_openai_response(messages, chat_message.category)
+        print(f"🔵 OpenAI response received: {ai_response[:100]}...")
         
         # Check if conversation should end (simple heuristic)
         conversation_length = len([msg for msg in messages if msg["role"] == "user"])
         should_complete = conversation_length >= 3 or "summary" in ai_response.lower()
+        
+        print(f"🔵 Conversation length: {conversation_length}, should_complete: {should_complete}")
         
         response_data = {
             "response": ai_response,
@@ -661,8 +722,12 @@ async def chat(chat_message: ChatMessage):
         
         # If conversation is complete, generate provider types
         if should_complete:
+            print("🔵 Generating provider types...")
             user_needs = extract_user_needs(messages)
+            print(f"🔵 User needs extracted: {user_needs[:100]}...")
+            
             provider_types = get_provider_types(user_needs, chat_message.category)
+            print(f"🔵 Provider types generated: {len(provider_types)} types")
             
             response_data["provider_types"] = provider_types
             response_data["user_profile"] = {
@@ -671,9 +736,13 @@ async def chat(chat_message: ChatMessage):
                 "conversation_length": conversation_length
             }
         
+        print("🔵 Chat response complete ✅")
         return ChatResponse(**response_data)
         
     except Exception as e:
+        print(f"❌ Chat error: {str(e)}")
+        import traceback
+        print(f"❌ Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.get("/categories")
